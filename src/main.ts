@@ -46,6 +46,9 @@ window.addEventListener('DOMContentLoaded', () => {
   const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
   const scaleInput = document.getElementById('scale') as HTMLInputElement;
   const fitButton = document.getElementById('fit') as HTMLButtonElement;
+  const makeRectBtn = document.getElementById('make-rect') as HTMLButtonElement;
+  const rectWInput = document.getElementById('rect-w') as HTMLInputElement;
+  const rectHInput = document.getElementById('rect-h') as HTMLInputElement;
   const toggleGridBtn = document.getElementById('toggle-grid') as HTMLButtonElement;
   const clearBtn = document.getElementById('clear') as HTMLButtonElement;
   const modeEditBtn = document.getElementById('mode-edit') as HTMLButtonElement;
@@ -72,7 +75,8 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   function drawGrid(): void {
-    const step = pxPerMeter;
+    // Quadrillage tous les 0.5m
+    const step = pxPerMeter * 0.5;
     ctx.strokeStyle = '#e5e7eb';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -86,6 +90,25 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     ctx.stroke();
   }
+  // -----------------------------------------------------------------------------
+  // Création de rectangle (contour pièce)
+  makeRectBtn.addEventListener('click', () => {
+    const w = parseFloat(rectWInput.value);
+    const h = parseFloat(rectHInput.value);
+    if (isNaN(w) || isNaN(h) || w <= 0 || h <= 0) return;
+    // Centre du canevas
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const halfW = M(w) / 2;
+    const halfH = M(h) / 2;
+    room.points = [
+      { x: cx - halfW, y: cy - halfH },
+      { x: cx + halfW, y: cy - halfH },
+      { x: cx + halfW, y: cy + halfH },
+      { x: cx - halfW, y: cy + halfH }
+    ];
+    draw();
+  });
 
   function drawRoom(): void {
     if (room.points.length === 0) return;
@@ -99,6 +122,33 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     ctx.closePath();
     ctx.stroke();
+
+    // Affichage des cotes (longueur en mètres) sur chaque segment
+    ctx.save();
+    ctx.font = '14px Arial';
+    ctx.fillStyle = '#2563eb';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < room.points.length; i++) {
+      const a = room.points[i];
+      const b = room.points[(i + 1) % room.points.length];
+      // Calcul de la longueur en mètres
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distPx = Math.sqrt(dx * dx + dy * dy);
+      const distM = distPx / pxPerMeter;
+      // Position du texte au centre du segment
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      // Décalage du texte perpendiculaire au segment (pour lisibilité)
+      const perp = { x: -dy, y: dx };
+      const norm = Math.sqrt(perp.x * perp.x + perp.y * perp.y);
+      const offset = 18; // pixels
+      const ox = perp.x / norm * offset;
+      const oy = perp.y / norm * offset;
+      ctx.fillText(distM.toFixed(2) + ' m', mx + ox, my + oy);
+    }
+    ctx.restore();
 
     // Draw vertices
     ctx.fillStyle = '#8b5cf6';
@@ -196,8 +246,17 @@ window.addEventListener('DOMContentLoaded', () => {
   canvas.addEventListener('pointermove', (ev) => {
     if (mode === 'edit' && draggingPoint && room.selectedPoint >= 0) {
       const rect = canvas.getBoundingClientRect();
-      const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
-      const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+      let x = (ev.clientX - rect.left) * (canvas.width / rect.width);
+      let y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+      // Magnétisme : snap sur X ou Y des autres points si proche
+      const SNAP_DIST = 10;
+      for (let i = 0; i < room.points.length; i++) {
+        if (i === room.selectedPoint) continue;
+        const px = room.points[i].x;
+        const py = room.points[i].y;
+        if (Math.abs(x - px) < SNAP_DIST) x = px;
+        if (Math.abs(y - py) < SNAP_DIST) y = py;
+      }
       room.points[room.selectedPoint].x = x;
       room.points[room.selectedPoint].y = y;
       draw();
