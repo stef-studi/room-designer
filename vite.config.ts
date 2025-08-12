@@ -4,7 +4,6 @@ import { defineConfig } from 'vite';
 // This file can be extended to customize the dev server, plugins or build options.
 export default defineConfig({
   root: '.',
-  publicDir: '.',
   server: {
     open: true,
   },
