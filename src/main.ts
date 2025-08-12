@@ -1,3 +1,9 @@
+import { Room } from './room';
+import { Furniture } from './furniture';
+import { Point, FurnitureItem } from './types';
+import { clearCanvas, drawGrid } from './canvas';
+import { showFurnitureForm } from './ui';
+
 window.addEventListener('DOMContentLoaded', () => {
   /**
    * Point and furniture type definitions for better type safety.
@@ -27,19 +33,14 @@ window.addEventListener('DOMContentLoaded', () => {
   let mode: Mode = 'edit';
   let pxPerMeter = 50;
   let showGrid = true;
-  const room: {
-    points: Point[];
-    selectedPoint: number;
-    draggingPoint: boolean;
-    bboxHandle: null | 'corner' | 'edge';
-  } = {
-    points: [],
-    selectedPoint: -1,
-    draggingPoint: false,
-    bboxHandle: null,
-  };
-  const furniture: FurnitureItem[] = [];
+
+  // Initialisation de la pièce (Room)
+  let room = new Room();
+
+  // Initialisation des meubles
+  let furniture: Furniture[] = [];
   let selectedFurniture: number = -1;
+
   const hover = { point: -1, edge: -1 };
 
   // Obtain references to DOM elements with proper typing.
@@ -69,108 +70,22 @@ window.addEventListener('DOMContentLoaded', () => {
    * time the state changes.
    */
   function draw(): void {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (showGrid) drawGrid();
-    drawRoom();
-    drawFurniture();
+    clearCanvas(ctx, canvas.width, canvas.height);
+    if (showGrid) drawGrid(ctx, canvas.width, canvas.height, pxPerMeter);
+    room.draw(ctx, pxPerMeter);
+    furniture.forEach((item, idx) => {
+      const color = furnitureColors[item.type] || furnitureColors.default;
+      item.draw(ctx, pxPerMeter, idx === selectedFurniture, color);
+    });
+    showFurnitureForm(furniture, selectedFurniture, draw);
   }
 
-  function drawGrid(): void {
-    // Quadrillage tous les 0.5m
-    const step = pxPerMeter * 0.5;
-    ctx.strokeStyle = '#e5e7eb';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = 0; x < canvas.width; x += step) {
-      ctx.moveTo(x + 0.5, 0);
-      ctx.lineTo(x + 0.5, canvas.height);
-    }
-    for (let y = 0; y < canvas.height; y += step) {
-      ctx.moveTo(0, y + 0.5);
-      ctx.lineTo(canvas.width, y + 0.5);
-    }
-    ctx.stroke();
-  }
-  // -----------------------------------------------------------------------------
-  // Création de rectangle (contour pièce)
-  makeRectBtn.addEventListener('click', () => {
-    const w = parseFloat(rectWInput.value);
-    const h = parseFloat(rectHInput.value);
-    if (isNaN(w) || isNaN(h) || w <= 0 || h <= 0) return;
-    // Centre du canevas
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-    const halfW = M(w) / 2;
-    const halfH = M(h) / 2;
-    room.points = [
-      { x: cx - halfW, y: cy - halfH },
-      { x: cx + halfW, y: cy - halfH },
-      { x: cx + halfW, y: cy + halfH },
-      { x: cx - halfW, y: cy + halfH }
-    ];
-    draw();
-  });
-
-  function drawRoom(): void {
-    if (room.points.length === 0) return;
-    ctx.strokeStyle = '#2563eb';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(room.points[0].x, room.points[0].y);
-    for (let i = 1; i < room.points.length; i++) {
-      const p = room.points[i];
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.closePath();
-    ctx.stroke();
-
-    // Affichage des cotes (longueur en mètres) sur chaque segment
-    ctx.save();
-    ctx.font = '14px Arial';
-    ctx.fillStyle = '#2563eb';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    for (let i = 0; i < room.points.length; i++) {
-      const a = room.points[i];
-      const b = room.points[(i + 1) % room.points.length];
-      // Calcul de la longueur en mètres
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const distPx = Math.sqrt(dx * dx + dy * dy);
-      const distM = distPx / pxPerMeter;
-      // Position du texte au centre du segment
-      const mx = (a.x + b.x) / 2;
-      const my = (a.y + b.y) / 2;
-      // Décalage du texte perpendiculaire au segment (pour lisibilité)
-      const perp = { x: -dy, y: dx };
-      const norm = Math.sqrt(perp.x * perp.x + perp.y * perp.y);
-      const offset = 18; // pixels
-      const ox = perp.x / norm * offset;
-      const oy = perp.y / norm * offset;
-      ctx.fillText(distM.toFixed(2) + ' m', mx + ox, my + oy);
-    }
-    ctx.restore();
-
-    // Draw vertices
-    for (let i = 0; i < room.points.length; i++) {
-      const p = room.points[i];
-      if (i === room.selectedPoint) {
-        // Point sélectionné : cercle orange plus grand
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
-        ctx.fillStyle = '#f59e0b';
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#fff';
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#8b5cf6';
-        ctx.fill();
-      }
-    }
+  function drawFurniture() {
+    furniture.forEach((item, idx) => {
+      const color = furnitureColors[item.type] || furnitureColors.default;
+      item.draw(ctx, pxPerMeter, idx === selectedFurniture, color);
+    });
+    showFurnitureForm(furniture, selectedFurniture, draw);
   }
 
   // Couleurs par type d'objet
@@ -182,33 +97,6 @@ window.addEventListener('DOMContentLoaded', () => {
     placard: '#0ea5e9',
     default: '#6b7280'
   };
-
-  // Correction du dessin : applique la rotation à la forme ET au texte
-  function drawFurniture(): void {
-    furniture.forEach((item, idx) => {
-      const color = furnitureColors[item.type] || furnitureColors.default;
-      ctx.save();
-      ctx.translate(item.x, item.y);
-      ctx.rotate(((item.rot ?? 0) * Math.PI) / 180);
-      // Dessine le rectangle
-      ctx.fillStyle = color;
-      ctx.fillRect(-item.w * pxPerMeter / 2, -item.h * pxPerMeter / 2, item.w * pxPerMeter, item.h * pxPerMeter);
-      // Sélection visuelle
-      if (idx === selectedFurniture) {
-        ctx.strokeStyle = '#2563eb';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(-item.w * pxPerMeter / 2, -item.h * pxPerMeter / 2, item.w * pxPerMeter, item.h * pxPerMeter);
-      }
-      // Dessine le texte au centre, rotation appliquée
-      ctx.font = '13px Arial';
-      ctx.fillStyle = '#111827';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(item.type, 0, 0);
-      ctx.restore();
-    });
-    showFurnitureInputs();
-  }
 
   // Ajoute les inputs pour modifier les dimensions du placard sélectionné
   function showPlacardInputs() {
@@ -410,7 +298,7 @@ window.addEventListener('DOMContentLoaded', () => {
         const spec = JSON.parse(data);
         const centerX = canvas.width / 2;
         const centerY = canvas.height / 2;
-        furniture.push({ x: centerX, y: centerY, w: spec.w, h: spec.h, type: spec.type, rot: 0 });
+        furniture.push(new Furniture({ x: centerX, y: centerY, w: spec.w, h: spec.h, type: spec.type, rot: 0 }));
         selectedFurniture = furniture.length - 1;
         mode = 'furniture';
         updateModeButtons();
@@ -427,7 +315,6 @@ window.addEventListener('DOMContentLoaded', () => {
   canvas.addEventListener('pointerdown', (ev) => {
     if (mode !== 'furniture') {
       selectedFurniture = -1;
-      cleanupFurnitureForm();
       cleanupPlacardForm();
       draw();
       return;
@@ -455,7 +342,6 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     if (!found) {
       selectedFurniture = -1;
-      cleanupFurnitureForm();
       cleanupPlacardForm();
       draw();
     }
@@ -566,78 +452,22 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Ajoute les inputs pour modifier les dimensions du lit et du canapé sélectionnés
-  function showFurnitureInputs() {
-    // Nettoie l'ancien formulaire
-    let form = document.getElementById('furniture-form');
-    if (form) form.remove();
-    if (selectedFurniture < 0) return;
-    const obj = furniture[selectedFurniture];
-    // Crée le formulaire
-    form = document.createElement('form');
-    form.id = 'furniture-form';
-    form.style.position = 'absolute';
-    form.style.left = (obj.x + 20) + 'px';
-    form.style.top = (obj.y - 20) + 'px';
-    form.style.background = '#fff';
-    form.style.border = '1px solid #e5e7eb';
-    form.style.borderRadius = '8px';
-    form.style.padding = '8px';
-    form.style.zIndex = '100';
-    let html = '';
-    // Champ texte éditable pour le nom/type
-    html += `<label style="font-size:12px">Nom&nbsp;: <input type="text" value="${obj.type}" id="furniture-type" style="width:80px" /></label><br />`;
-    // Inputs pour largeur/profondeur si applicable
-    if (obj.type === 'lit' || obj.type === 'canape' || obj.type === 'placard') {
-      html += `<label style="font-size:12px">Largeur (m): <input type="number" step="0.1" min="0.2" value="${obj.w}" id="furniture-w" style="width:50px" /></label>`;
-      html += `<label style="font-size:12px;margin-left:8px">Profondeur (m): <input type="number" step="0.1" min="0.2" value="${obj.h}" id="furniture-h" style="width:50px" /></label>`;
-    }
-    // Boutons rotation et suppression (toujours présents)
-    html += `<button type="button" id="furniture-rotate" style="margin-left:12px;color:#2563eb;background:#fff;border:1px solid #2563eb;border-radius:6px;padding:2px 8px;cursor:pointer">Rotation 90°</button>`;
-    html += `<button type="button" id="furniture-delete" style="margin-left:12px;color:#ef4444;background:#fff;border:1px solid #ef4444;border-radius:6px;padding:2px 8px;cursor:pointer">Supprimer</button>`;
-    form.innerHTML = html;
-    document.body.appendChild(form);
-    // Gestion du texte éditable
-    form.querySelector('#furniture-type')?.addEventListener('change', (e) => {
-      obj.type = (e.target as HTMLInputElement).value;
-      draw();
-    });
-    // Gestion des changements largeur/profondeur
-    form.querySelector('#furniture-w')?.addEventListener('change', (e) => {
-      const val = parseFloat((e.target as HTMLInputElement).value);
-      if (!isNaN(val) && val > 0) {
-        obj.w = val;
-        draw();
-      }
-    });
-    form.querySelector('#furniture-h')?.addEventListener('change', (e) => {
-      const val = parseFloat((e.target as HTMLInputElement).value);
-      if (!isNaN(val) && val > 0) {
-        obj.h = val;
-        draw();
-      }
-    });
-    // Rotation 90°
-    form.querySelector('#furniture-rotate')?.addEventListener('click', (e) => {
-      obj.rot = ((obj.rot ?? 0) + 90) % 360;
-      draw();
-    });
-    // Suppression
-    form.querySelector('#furniture-delete')?.addEventListener('click', (e) => {
-      furniture.splice(selectedFurniture, 1);
-      selectedFurniture = -1;
-      cleanupFurnitureForm();
-      cleanupPlacardForm();
-      draw();
-    });
-  }
-
-  // Nettoyage du formulaire si on change de mode ou sélection
-  function cleanupFurnitureForm() {
-    const form = document.getElementById('furniture-form');
-    if (form) form.remove();
-  }
-  modeEditBtn.addEventListener('click', cleanupFurnitureForm);
-  modeDrawBtn.addEventListener('click', cleanupFurnitureForm);
-  clearBtn.addEventListener('click', cleanupFurnitureForm);
+  makeRectBtn.addEventListener('click', () => {
+    const w = parseFloat(rectWInput.value);
+    const h = parseFloat(rectHInput.value);
+    if (isNaN(w) || isNaN(h) || w <= 0 || h <= 0) return;
+    // Centre du canevas
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const halfW = pxPerMeter * w / 2;
+    const halfH = pxPerMeter * h / 2;
+    // Crée une nouvelle Room avec le rectangle
+    room = new Room([
+      { x: cx - halfW, y: cy - halfH },
+      { x: cx + halfW, y: cy - halfH },
+      { x: cx + halfW, y: cy + halfH },
+      { x: cx - halfW, y: cy + halfH }
+    ]);
+    draw();
+  });
 });
