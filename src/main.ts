@@ -151,11 +151,24 @@ window.addEventListener('DOMContentLoaded', () => {
     ctx.restore();
 
     // Draw vertices
-    ctx.fillStyle = '#8b5cf6';
-    for (const p of room.points) {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-      ctx.fill();
+    for (let i = 0; i < room.points.length; i++) {
+      const p = room.points[i];
+      if (i === room.selectedPoint) {
+        // Point sélectionné : cercle orange plus grand
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#8b5cf6';
+        ctx.fill();
+      }
     }
   }
 
@@ -224,14 +237,27 @@ window.addEventListener('DOMContentLoaded', () => {
 
   let draggingPoint = false;
 
+  canvas.tabIndex = 0; // Rendre le canevas focusable
   canvas.addEventListener('pointerdown', (ev) => {
     const rect = canvas.getBoundingClientRect();
     const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
     const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
     if (mode === 'draw') {
-      // Ajouter un point directement
-      room.points.push({ x, y });
-      draw();
+      // Maj+clic : ajouter un point à la position
+      if (ev.shiftKey) {
+        room.points.push({ x, y });
+        draw();
+        return;
+      }
+      // Sinon, sélectionne un point proche
+      const threshold = 8;
+      const idx = room.points.findIndex(p => Math.hypot(p.x - x, p.y - y) < threshold);
+      if (idx >= 0) {
+        room.selectedPoint = idx;
+        draggingPoint = true;
+        draw();
+        canvas.focus();
+      }
     } else if (mode === 'edit') {
       // Chercher un point proche
       const threshold = 8; // pixels
@@ -239,7 +265,17 @@ window.addEventListener('DOMContentLoaded', () => {
       if (idx >= 0) {
         room.selectedPoint = idx;
         draggingPoint = true;
+        draw();
+        canvas.focus();
       }
+    }
+  });
+  // Supprimer le point sélectionné avec la touche Suppr (Delete ou Backspace)
+  canvas.addEventListener('keydown', (ev) => {
+    if ((ev.key === 'Delete' || ev.key === 'Backspace') && room.selectedPoint >= 0 && room.points.length > 1) {
+      room.points.splice(room.selectedPoint, 1);
+      room.selectedPoint = -1;
+      draw();
     }
   });
 
