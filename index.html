@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Aménageur de Pièce — Contours & Meubles</title>
+<style>
+  :root { --ui:#111827; --muted:#6b7280; --brand:#2563eb; --paper:#ffffff; --bg:#f3f4f6; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ui)}
+  header{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--paper);border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:10}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;padding:10px 16px;background:var(--paper);border-bottom:1px solid #e5e7eb}
+  .group{display:flex;align-items:center;gap:8px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:8px}
+  .group label{font-size:12px;color:var(--muted)}
+  .group input,.group select{padding:6px 8px;border:1px solid #e5e7eb;border-radius:8px;min-width:70px;background:white}
+  .btn{padding:8px 12px;border:1px solid #d1d5db;border-radius:10px;background:white;cursor:pointer}
+  .btn[aria-pressed="true"], .btn.primary{background:var(--brand);color:white;border-color:var(--brand)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  #wrap{display:grid;grid-template-columns:320px 1fr;gap:12px;padding:12px}
+  aside{background:var(--paper);border:1px solid #e5e7eb;border-radius:12px;padding:12px}
+  aside h2{font-size:14px;margin:0 0 8px 0}
+  #stage{background:var(--paper);border:1px solid #e5e7eb;border-radius:12px;position:relative;overflow:hidden}
+  canvas{display:block;width:100%;height:100%;}
+  .hint{font-size:12px;color:var(--muted)}
+  .list{display:grid;gap:6px}
+  .pill{display:inline-flex;gap:6px;align-items:center;border:1px solid #e5e7eb;padding:6px 8px;border-radius:999px}
+</style>
+</head>
+<body>
+  <header>
+    <h1>Outil d'aménagement — contours redimensionnables</h1>
+    <span class="hint">Astuce : Maj+clic pour ajouter un point, Suppr pour enlever le point sélectionné.</span>
+  </header>
+
+  <div class="toolbar">
+    <div class="group" role="group" aria-label="Modes">
+      <button id="mode-edit" class="btn" aria-pressed="true">Modifier contour</button>
+      <button id="mode-draw" class="btn">Dessiner contour</button>
+      <button id="mode-furniture" class="btn">Placer meubles</button>
+    </div>
+    <div class="group">
+      <label for="scale">Échelle (px/m)</label>
+      <input id="scale" type="number" step="1" min="5" value="50" />
+      <button id="fit" class="btn">Adapter au canevas</button>
+    </div>
+    <div class="group">
+      <label>Créer rectangle (m)</label>
+      <input id="rect-w" type="number" step="0.1" min="0.5" value="4" title="Largeur (m)"/>
+      <input id="rect-h" type="number" step="0.1" min="0.5" value="3" title="Profondeur (m)"/>
+      <button id="make-rect" class="btn">Insérer</button>
+    </div>
+    <div class="group">
+      <button id="export" class="btn">Exporter JSON</button>
+      <input id="import" type="file" accept="application/json"/>
+    </div>
+  </div>
+
+  <div id="wrap">
+    <aside>
+      <h2>Bibliothèque meubles</h2>
+      <div class="list">
+        <button class="pill" data-furniture='{"type":"canape","w":2,"h":0.9}'>Canapé 2m</button>
+        <button class="pill" data-furniture='{"type":"table","w":1.2,"h":0.8}'>Table 120×80</button>
+        <button class="pill" data-furniture='{"type":"lit","w":1.6,"h":2}'>Lit 160×200</button>
+        <button class="pill" data-furniture='{"type":"chaise","w":0.45,"h":0.45}'>Chaise</button>
+        <button class="pill" data-furniture='{"type":"placard","w":2,"h":0.6}'>Placard 2m</button>
+      </div>
+      <hr/>
+      <h2>Actions</h2>
+      <div class="list">
+        <button id="toggle-grid" class="btn">Grille</button>
+        <button id="clear" class="btn">Tout effacer</button>
+      </div>
+      <p class="hint">Glissez les sommets violets pour redimensionner la pièce. Faites glisser les poignées carrées des coins pour une mise à l'échelle proportionnelle.</p>
+    </aside>
+
+    <div id="stage">
+      <canvas id="c" width="1400" height="900" aria-label="plan"></canvas>
+    </div>
+  </div>
+
+<script>
+// --- Etat ---
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let mode = 'edit'; // 'draw' | 'edit' | 'furniture'
+let pxPerMeter = 50;
+let showGrid = true;
+let room = { points: [], selectedPoint: -1, draggingPoint: false, bboxHandle: null };
+let furniture = []; // {x,y,w,h,type,rot}
+let hover = { point: -1, edge: -1 };
+
+// --- Utilitaires géométrie ---
+const M = (m) => m * pxPerMeter;
+function dist2(a,b){const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy)}
+function pointOnSeg(p,a,b,th=6){ // en pixels
+  const ax=a.x, ay=a.y, bx=b.x, by=b.y; const abx=bx-ax, aby=by-ay; const apx=p.x-ax, apy=p.y-ay;
+  const ab2=abx*abx+aby*aby; if(!ab2) return false; let t=(apx*abx+apy*aby)/ab2; t=Math.max(0,Math.min(1,t));
+  const cx=ax+t*abx, cy=ay+t*aby; return Math.hypot(p.x-cx,p.y-cy)<=th;
+}
+function bboxOf(poly){ if(poly.length===0) return null; let xs=poly.map(p=>p.x), ys=poly.map(p=>p.y); const minx=Math.min(...xs), maxx=Math.max(...xs), miny=Math.min(...ys), maxy=Math.max(...ys); return {minx,miny,maxx,maxy}; }
+
+// --- Dessin ---
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if(showGrid) drawGrid();
+  drawRoom();
+  drawFurniture();
+}
+function drawGrid(){
+  const step = M(0.5); // 50 cm
+  ctx.save();
+  ctx.lineWidth=1; ctx.strokeStyle='#e5e7eb';
+  for(let x=0;x<canvas.width;x+=step){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();}
+  for(let y=0;y<canvas.height;y+=step){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke();}
+  // mètres plus marqués
+  ctx.strokeStyle='#cbd5e1';
+  const stepM=M(1); for(let x=0;x<canvas.width;x+=stepM){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();}
+  for(let y=0;y<canvas.height;y+=stepM){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke();}
+  ctx.restore();
+}
+function drawRoom(){
+  const pts = room.points;
+  if(pts.length===0) return;
+  // face
+  ctx.fillStyle = 'rgba(99,102,241,0.08)'; // indigo clair
+  ctx.strokeStyle = '#6366f1';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // sommets
+  pts.forEach((p,idx)=>{
+    ctx.fillStyle = idx===room.selectedPoint? '#7c3aed':'#8b5cf6';
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,6,0,Math.PI*2);
+    ctx.fill();
+  });
+
+  // longueurs (en m)
+  ctx.fillStyle='#111827'; ctx.font='12px system-ui';
+  for(let i=0;i<pts.length;i++){
+    const a=pts[i], b=pts[(i+1)%pts.length];
+    const mid={x:(a.x+b.x)/2, y:(a.y+b.y)/2};
+    const len = dist2(a,b)/pxPerMeter; // m
+    const label = len.toFixed(2)+' m';
+    ctx.save();
+    ctx.translate(mid.x, mid.y);
+    const ang = Math.atan2(b.y-a.y, b.x-a.x);
+    ctx.rotate(ang);
+    ctx.fillText(label, -ctx.measureText(label).width/2, -6);
+    ctx.restore();
+  }
+
+  // poignées de redimensionnement (bbox)
+  const bb=bboxOf(pts); if(bb){
+    ctx.setLineDash([6,6]); ctx.strokeStyle='#a78bfa'; ctx.lineWidth=1; ctx.strokeRect(bb.minx,bb.miny,bb.maxx-bb.minx,bb.maxy-bb.miny); ctx.setLineDash([]);
+    const hs = 8; const handles=[
+      {k:'nw',x:bb.minx,y:bb.miny},{k:'ne',x:bb.maxx,y:bb.miny},
+      {k:'se',x:bb.maxx,y:bb.maxy},{k:'sw',x:bb.minx,y:bb.maxy}
+    ];
+    handles.forEach(h=>{ctx.fillStyle='#4f46e5'; ctx.fillRect(h.x-hs,h.y-hs,hs*2,hs*2)});
+  }
+}
+function drawFurniture(){
+  furniture.forEach(f=>{
+    ctx.save();
+    ctx.translate(f.x,f.y); ctx.rotate(f.rot||0);
+    ctx.fillStyle='#94a3b8';
+    ctx.fillRect(-M(f.w)/2,-M(f.h)/2,M(f.w),M(f.h));
+    ctx.fillStyle='#1f2937'; ctx.font='12px system-ui';
+    const label = `${f.type} ${f.w}×${f.h}m`;
+    ctx.fillText(label, -ctx.measureText(label).width/2, -M(f.h)/2 - 6);
+    ctx.restore();
+  })
+}
+
+// --- Interaction ---
+let dragging = false; let dragIndex=-1; let last={x:0,y:0};
+canvas.addEventListener('mousedown', (e)=>{
+  const p = evPos(e);
+  if(mode==='draw'){
+    room.points.push(p); draw(); return;
+  }
+  if(mode==='edit'){
+    const hi = hoverPoint(p);
+    if(hi>-1){ dragging=true; dragIndex=hi; room.selectedPoint=hi; draw(); return; }
+    const hBBox = hitBBoxHandle(p); if(hBBox){ dragging=true; room.bboxHandle=hBBox; last=p; return; }
+    // edge insertion avec Maj+clic
+    if(e.shiftKey){
+      const ei = hoverEdge(p);
+      if(ei>-1){ room.points.splice(ei+1,0,p); room.selectedPoint=ei+1; draw(); return; }
+    }
+  }
+  if(mode==='furniture'){
+    // placer un meuble présentement sélectionné par palette (stocké dans pendingFurniture)
+    if(pendingFurniture){
+      furniture.push({x:p.x,y:p.y,w:pendingFurniture.w,h:pendingFurniture.h,type:pendingFurniture.type,rot:0});
+      pendingFurniture=null; draw();
+    }
+  }
+});
+canvas.addEventListener('mousemove', (e)=>{
+  const p = evPos(e);
+  if(mode==='edit'){
+    if(dragging && dragIndex>-1){ room.points[dragIndex]=p; draw(); return; }
+    if(dragging && room.bboxHandle){
+      // mise à l'échelle de tout le polygone selon la poignée
+      const bb=bboxOf(room.points); if(!bb) return; const dx=p.x-last.x, dy=p.y-last.y; last=p;
+      const cx=(bb.minx+bb.maxx)/2, cy=(bb.miny+bb.maxy)/2; // centre
+      let sx=1, sy=1;
+      if(room.bboxHandle==='nw'){ sx=(bb.maxx-(bb.minx+dx))/(bb.maxx-bb.minx); sy=(bb.maxy-(bb.miny+dy))/(bb.maxy-bb.miny); }
+      if(room.bboxHandle==='ne'){ sx=((bb.maxx+dx)-bb.minx)/(bb.maxx-bb.minx); sy=(bb.maxy-(bb.miny+dy))/(bb.maxy-bb.miny); }
+      if(room.bboxHandle==='se'){ sx=((bb.maxx+dx)-bb.minx)/(bb.maxx-bb.minx); sy=((bb.maxy+dy)-bb.miny)/(bb.maxy-bb.miny); }
+      if(room.bboxHandle==='sw'){ sx=(bb.maxx-(bb.minx+dx))/(bb.maxx-bb.minx); sy=((bb.maxy+dy)-bb.miny)/(bb.maxy-bb.miny); }
+      room.points = room.points.map(pt=>({x: cx + (pt.x-cx)*sx, y: cy + (pt.y-cy)*sy}));
+      draw(); return;
+    }
+    // feedback hover
+    const hi = hoverPoint(p); canvas.style.cursor = hi>-1? 'grab' : (hitBBoxHandle(p)?'nwse-resize' : (hoverEdge(p)>-1 && e.shiftKey ? 'copy' : 'default'));
+  }
+});
+window.addEventListener('mouseup', ()=>{ dragging=false; dragIndex=-1; room.bboxHandle=null; });
+window.addEventListener('keydown', (e)=>{
+  if((e.key==='Delete' || e.key==='Backspace') && mode==='edit' && room.selectedPoint>-1){
+    room.points.splice(room.selectedPoint,1); room.selectedPoint=-1; draw();
+  }
+});
+
+function hoverPoint(p){
+  const r=8; for(let i=0;i<room.points.length;i++){ if(dist2(room.points[i],p)<=r) return i; } return -1;
+}
+function hoverEdge(p){
+  for(let i=0;i<room.points.length;i++){
+    const a=room.points[i], b=room.points[(i+1)%room.points.length];
+    if(pointOnSeg(p,a,b,8)) return i;
+  } return -1;
+}
+function hitBBoxHandle(p){
+  const bb=bboxOf(room.points); if(!bb) return null; const hs=10;
+  const boxes={nw:{x:bb.minx,y:bb.miny}, ne:{x:bb.maxx,y:bb.miny}, se:{x:bb.maxx,y:bb.maxy}, sw:{x:bb.minx,y:bb.maxy}};
+  for(const k in boxes){ const b=boxes[k]; if(p.x>=b.x-hs&&p.x<=b.x+hs&&p.y>=b.y-hs&&p.y<=b.y+hs) return k; }
+  return null;
+}
+function evPos(e){ const r=canvas.getBoundingClientRect(); return {x:(e.clientX-r.left)*canvas.width/r.width, y:(e.clientY-r.top)*canvas.height/r.height}; }
+
+// --- UI boutons ---
+const btnEdit = document.getElementById('mode-edit');
+const btnDraw = document.getElementById('mode-draw');
+const btnFurn = document.getElementById('mode-furniture');
+function setMode(m){ mode=m; [btnEdit,btnDraw,btnFurn].forEach(b=>b.setAttribute('aria-pressed','false')); if(m==='edit') btnEdit.setAttribute('aria-pressed','true'); if(m==='draw') btnDraw.setAttribute('aria-pressed','true'); if(m==='furniture') btnFurn.setAttribute('aria-pressed','true'); }
+btnEdit.onclick=()=>setMode('edit'); btnDraw.onclick=()=>setMode('draw'); btnFurn.onclick=()=>setMode('furniture');
+
+// bibliothèque meubles
+let pendingFurniture=null;
+[...document.querySelectorAll('.pill')].forEach(p=>p.addEventListener('click',()=>{ pendingFurniture=JSON.parse(p.dataset.furniture); setMode('furniture') }));
+
+// grille
+document.getElementById('toggle-grid').onclick=()=>{ showGrid=!showGrid; draw(); };
+
+// échelle
+const scaleInput=document.getElementById('scale');
+scaleInput.addEventListener('change',()=>{ pxPerMeter=Math.max(5,Number(scaleInput.value)||50); draw(); });
+
+// rectangle rapide (mètres)
+const rectW=document.getElementById('rect-w');
+const rectH=document.getElementById('rect-h');
+document.getElementById('make-rect').onclick=()=>{
+  const w=Number(rectW.value), h=Number(rectH.value); if(!(w>0&&h>0)) return;
+  const cx=canvas.width/2, cy=canvas.height/2; const halfW=M(w/2), halfH=M(h/2);
+  room.points=[{x:cx-halfW,y:cy-halfH},{x:cx+halfW,y:cy-halfH},{x:cx+halfW,y:cy+halfH},{x:cx-halfW,y:cy+halfH}];
+  setMode('edit'); draw();
+};
+
+// adapter au canevas
+document.getElementById('fit').onclick=()=>{
+  if(room.points.length<3) return; const bb=bboxOf(room.points); const pad=40; const sx=(canvas.width-2*pad)/(bb.maxx-bb.minx); const sy=(canvas.height-2*pad)/(bb.maxy-bb.miny); const s=Math.min(sx,sy);
+  const cx=(bb.minx+bb.maxx)/2, cy=(bb.miny+bb.maxy)/2; const nx=canvas.width/2, ny=canvas.height/2;
+  room.points=room.points.map(pt=>({x:nx+(pt.x-cx)*s, y:ny+(pt.y-cy)*s})); draw();
+};
+
+// exporter / importer
+const dl = (name, data)=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([data],{type:'application/json'})); a.download=name; a.click(); URL.revokeObjectURL(a.href); };
+
+document.getElementById('export').onclick=()=>{
+  const json = JSON.stringify({ pxPerMeter, room, furniture }, null, 2);
+  dl('plan.json', json);
+};
+
+document.getElementById('import').addEventListener('change', async (e)=>{
+  const f=e.target.files?.[0]; if(!f) return; const txt=await f.text(); try{ const data=JSON.parse(txt); pxPerMeter=data.pxPerMeter||pxPerMeter; room=data.room||room; furniture=data.furniture||[]; scaleInput.value=pxPerMeter; draw(); }catch(err){ alert('JSON invalide'); }
+});
+
+// effacer
+document.getElementById('clear').onclick=()=>{ if(confirm('Effacer le contour et les meubles ?')){ room={points:[],selectedPoint:-1,draggingPoint:false,bboxHandle:null}; furniture=[]; draw(); } };
+
+// init
+// Exemple : rectangle 4×3 m par défaut
+room.points=[{x:200,y:200},{x:200+M(4),y:200},{x:200+M(4),y:200+M(3)},{x:200,y:200+M(3)}];
+draw();
+</script>
+</body>
+</html>
